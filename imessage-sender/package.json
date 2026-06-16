@@ -1,0 +1,17 @@
+{
+  "name": "imessage-sender",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Scheduled blue-iMessage sender for the Love Island bach weekend. Reads a Google Sheet, sends due rows via LoopMessage, writes status back. Idempotent, timezone-aware, zero runtime dependencies.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "send": "node send.mjs",
+    "dry-run": "node send.mjs --dry-run",
+    "seed": "node seed.mjs",
+    "preflight": "node preflight.mjs",
+    "test": "node --test"
+  }
+}

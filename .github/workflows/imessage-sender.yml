@@ -1,0 +1,57 @@
+name: iMessage Sender
+
+# Runs every 5 minutes. NOTE: cron here is UTC; all Sheet times are America/New_York
+# and are converted in code. GitHub's scheduler can lag a few minutes under load, which
+# is exactly why the sender has a 2h grace window.
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: print what WOULD send, change nothing'
+        type: boolean
+        default: false
+
+# Never let two runs overlap (defense-in-depth for idempotency). Queue, don't cancel.
+concurrency:
+  group: imessage-sender
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: imessage-sender
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # No dependencies to install — the sender is pure Node stdlib.
+
+      - name: Send due messages
+        env:
+          # ---- Google (repo variables; Sheet ID is not secret) ----
+          SHEET_ID: ${{ vars.SHEET_ID }}
+          SHEET_TAB: ${{ vars.SHEET_TAB }}            # optional; defaults to "Schedule"
+          SCHEDULE_TZ: America/New_York
+          GRACE_WINDOW_HOURS: '2'
+          # ---- Secrets ----
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          LOOPMESSAGE_AUTH_KEY: ${{ secrets.LOOPMESSAGE_AUTH_KEY }}
+          LOOPMESSAGE_SECRET_KEY: ${{ secrets.LOOPMESSAGE_SECRET_KEY }}
+          LOOPMESSAGE_SENDER_NAME: ${{ secrets.LOOPMESSAGE_SENDER_NAME }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "Manual DRY RUN"
+            node send.mjs --dry-run
+          else
+            node send.mjs
+          fi

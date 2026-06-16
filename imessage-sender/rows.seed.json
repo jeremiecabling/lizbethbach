@@ -1,0 +1,101 @@
+[
+  {
+    "id": "thu-bbq-julia-01",
+    "recipient_name": "Julia",
+    "recipient_phone": "+1XXXXXXXXXX",
+    "moment": "BBQ + pool — first afternoon",
+    "send_at_local": "2026-06-18 14:00",
+    "message": "",
+    "status": "HOLD",
+    "sent_at_utc": "",
+    "result_note": ""
+  },
+  {
+    "id": "thu-dinner-hailey-02",
+    "recipient_name": "Hailey",
+    "recipient_phone": "+1XXXXXXXXXX",
+    "moment": "Dinner @ Crazy About You",
+    "send_at_local": "2026-06-18 20:00",
+    "message": "",
+    "status": "HOLD",
+    "sent_at_utc": "",
+    "result_note": ""
+  },
+  {
+    "id": "thu-dancing-anna-03",
+    "recipient_name": "Anna",
+    "recipient_phone": "+1XXXXXXXXXX",
+    "moment": "Dancing @ Black Bird Ordinary",
+    "send_at_local": "2026-06-18 22:00",
+    "message": "",
+    "status": "HOLD",
+    "sent_at_utc": "",
+    "result_note": ""
+  },
+  {
+    "id": "fri-dragbrunch-priya-04",
+    "recipient_name": "Priya",
+    "recipient_phone": "+1XXXXXXXXXX",
+    "moment": "Palace Drag Brunch",
+    "send_at_local": "2026-06-19 11:30",
+    "message": "",
+    "status": "HOLD",
+    "sent_at_utc": "",
+    "result_note": ""
+  },
+  {
+    "id": "fri-southbeach-lizbeth-05",
+    "recipient_name": "Lizbeth",
+    "recipient_phone": "+1XXXXXXXXXX",
+    "moment": "South Beach",
+    "send_at_local": "2026-06-19 15:00",
+    "message": "",
+    "status": "HOLD",
+    "sent_at_utc": "",
+    "result_note": ""
+  },
+  {
+    "id": "fri-games-priya-06",
+    "recipient_name": "Priya",
+    "recipient_phone": "+1XXXXXXXXXX",
+    "moment": "Wine down + games (Priya & Anna run games)",
+    "send_at_local": "2026-06-19 20:30",
+    "message": "",
+    "status": "HOLD",
+    "sent_at_utc": "",
+    "result_note": ""
+  },
+  {
+    "id": "sat-boat-hailey-07",
+    "recipient_name": "Hailey",
+    "recipient_phone": "+1XXXXXXXXXX",
+    "moment": "Boat Day kickoff",
+    "send_at_local": "2026-06-20 11:30",
+    "message": "",
+    "status": "HOLD",
+    "sent_at_utc": "",
+    "result_note": ""
+  },
+  {
+    "id": "sat-cake-julia-08",
+    "recipient_name": "Julia",
+    "recipient_phone": "+1XXXXXXXXXX",
+    "moment": "Sushi boat + birthday cake",
+    "send_at_local": "2026-06-20 19:00",
+    "message": "",
+    "status": "HOLD",
+    "sent_at_utc": "",
+    "result_note": ""
+  },
+  {
+    "id": "sun-sendoff-lizbeth-09",
+    "recipient_name": "Lizbeth",
+    "recipient_phone": "+1XXXXXXXXXX",
+    "moment": "Departure / sendoff",
+    "send_at_local": "2026-06-21 09:00",
+    "message": "",
+    "status": "HOLD",
+    "sent_at_utc": "",
+    "result_note": ""
+  }
+]

@@ -1,0 +1,8 @@
+node_modules/
+.env
+.env.*
+*.local
+# Never commit the service-account key or any credential files
+service-account*.json
+*-service-account.json
+google-credentials*.json
