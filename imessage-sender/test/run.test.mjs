@@ -1,8 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import { STATUS } from '../lib/config.mjs';
 import { localToUtc, getTimeZoneOffsetMs, decideRow } from '../lib/schedule.mjs';
+import { parseCsv, makeCsvClient } from '../lib/csv_store.mjs';
 import { run } from '../send.mjs';
 
 const TZ = 'America/New_York';
@@ -22,6 +26,12 @@ test('EST (winter): 2026-01-10 09:00 ET -> 14:00 UTC', () => {
 
 test('accepts "T" separator and seconds', () => {
   assert.equal(localToUtc('2026-06-21T09:00:00', TZ).toISOString(), '2026-06-21T13:00:00.000Z');
+});
+
+test('accepts US / spreadsheet format (Numbers may reformat the cell)', () => {
+  assert.equal(localToUtc('6/18/2026 2:00 PM', TZ).toISOString(), '2026-06-18T18:00:00.000Z');
+  assert.equal(localToUtc('6/18/2026 14:00', TZ).toISOString(), '2026-06-18T18:00:00.000Z');
+  assert.equal(localToUtc('12/31/2026 12:00 AM', TZ).toISOString(), '2026-12-31T05:00:00.000Z');
 });
 
 test('offset is -4h in June, -5h in January for ET', () => {
@@ -88,13 +98,13 @@ test('status is case/space tolerant', () => {
 
 function fakeSheet(rows, { failUpdate = false } = {}) {
   const events = [];
-  const store = new Map(); // rowNumber -> latest merged updates
+  const store = new Map(); // key -> latest merged updates
   return {
-    rows: rows.map((r, i) => ({ _rowNumber: i + 2, ...r })),
-    update(rowNumber, updates) {
-      events.push({ type: 'update', rowNumber, updates });
-      if (failUpdate) return Promise.reject(new Error('sheet write failed'));
-      store.set(rowNumber, { ...(store.get(rowNumber) || {}), ...updates });
+    rows: rows.map((r, i) => ({ _key: i + 2, ...r })),
+    update(key, updates) {
+      events.push({ type: 'update', key, updates });
+      if (failUpdate) return Promise.reject(new Error('store write failed'));
+      store.set(key, { ...(store.get(key) || {}), ...updates });
       return Promise.resolve();
     },
     events,
@@ -102,8 +112,7 @@ function fakeSheet(rows, { failUpdate = false } = {}) {
   };
 }
 
-const loopCreds = { authKey: 'a', secretKey: 's', senderName: 'Sender' };
-const runOpts = { now, graceMs, tz: TZ, loopCreds, log: () => {} };
+const runOpts = { now, graceMs, tz: TZ, log: () => {} };
 
 test('happy path: reserves SENDING before send, then writes SENT + message_id', async () => {
   const sheet = fakeSheet([baseRow({ id: 'go', message: 'verbatim copy', status: 'READY' })]);
@@ -189,4 +198,54 @@ test('dry-run touches nothing and never calls the provider', async () => {
   assert.equal(sheet.events.length, 0);
   assert.equal(summary.sent, 0);
   assert.equal(summary.dryRun, true);
+});
+
+// ---------------------------------------------------------------------------
+// Local CSV store + append-only ledger (the Mac path)
+// ---------------------------------------------------------------------------
+
+test('CSV parser handles quoted commas, quotes, and newlines', () => {
+  const csv = 'a,b,c\n1,"x, y","he said ""hi"""\n2,"line1\nline2",z\n';
+  const m = parseCsv(csv);
+  assert.deepEqual(m[0], ['a', 'b', 'c']);
+  assert.deepEqual(m[1], ['1', 'x, y', 'he said "hi"']);
+  assert.deepEqual(m[2], ['2', 'line1\nline2', 'z']);
+});
+
+function tmpFiles() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'imsg-'));
+  return { csv: path.join(dir, 'schedule.csv'), ledger: path.join(dir, 'sent-ledger.json') };
+}
+
+const CSV_HEADER = 'id,recipient_name,recipient_phone,moment,send_at_local,message,status';
+
+test('ledger status overrides the CSV status column', () => {
+  const { csv, ledger } = tmpFiles();
+  fs.writeFileSync(csv, `${CSV_HEADER}\nr1,Julia,+15550001111,m,2026-06-18 14:00,hi,READY\n`);
+  fs.writeFileSync(ledger, JSON.stringify({ r1: { status: 'SENT', result_note: 'MID' } }));
+  const client = makeCsvClient({ csvPath: csv, ledgerPath: ledger });
+  assert.equal(client.rows[0].status, 'SENT');
+  assert.equal(client.rows[0]._key, 'r1');
+});
+
+test('end-to-end CSV: sends once, writes ledger, never re-sends on a second run', async () => {
+  const { csv, ledger } = tmpFiles();
+  fs.writeFileSync(csv, `${CSV_HEADER}\nr1,Julia,+15550001111,m,2026-06-18 14:00,"hi, there",READY\n`);
+
+  let sendCount = 0;
+  const send = async () => { sendCount++; return { ok: true, messageId: 'MID-1' }; };
+
+  // First run: due row -> sends, ledger records SENT.
+  await run({ sheet: makeCsvClient({ csvPath: csv, ledgerPath: ledger }), send, ...runOpts });
+  assert.equal(sendCount, 1);
+  const led = JSON.parse(fs.readFileSync(ledger, 'utf8'));
+  assert.equal(led.r1.status, STATUS.SENT);
+  assert.equal(led.r1.result_note, 'MID-1');
+
+  // Second run reads the same files; the ledger makes it SENT -> no resend.
+  await run({ sheet: makeCsvClient({ csvPath: csv, ledgerPath: ledger }), send, ...runOpts });
+  assert.equal(sendCount, 1, 'must not re-send after ledger marks SENT');
+
+  // The editable CSV was never modified by the system.
+  assert.match(fs.readFileSync(csv, 'utf8'), /READY/);
 });

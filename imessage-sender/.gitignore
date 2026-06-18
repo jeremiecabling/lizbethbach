@@ -2,7 +2,15 @@ node_modules/
 .env
 .env.*
 *.local
-# Never commit the service-account key or any credential files
+
+# Runtime state — the system writes this; never commit it (it's the SENT ledger)
+sent-ledger.json
+
+# Local overrides + generated artifacts
+macos/env.sh
+*.vcf
+
+# Never commit the service-account key or any credential files (cloud path)
 service-account*.json
 *-service-account.json
 google-credentials*.json

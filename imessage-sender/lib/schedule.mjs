@@ -26,14 +26,45 @@ export function getTimeZoneOffsetMs(date, tz) {
 }
 
 /**
- * Convert an ET wall-clock string ("YYYY-MM-DD HH:mm" or with "T"/seconds) into a
- * real UTC instant. Returns a Date, or null if the string is not parseable.
+ * Parse a wall-clock string into calendar fields. Accepts two shapes so that a CSV
+ * edited in a plain editor OR re-formatted by Numbers/Excel still works:
+ *   1. ISO-ish:  "YYYY-MM-DD HH:mm"  (also "T" separator, optional seconds)
+ *   2. US style: "M/D/YYYY h:mm AM/PM" (also 24h, 2- or 4-digit year)
+ * Returns { Y, Mo, D, h, mi, s } or null.
+ */
+export function parseWallClock(localStr) {
+  const str = String(localStr ?? '').trim();
+
+  let m = str.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (m) {
+    const [, Y, Mo, D, h, mi, s] = m;
+    return { Y: +Y, Mo: +Mo, D: +D, h: +h, mi: +mi, s: s ? +s : 0 };
+  }
+
+  m = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})[ ,]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AaPp][Mm])?$/);
+  if (m) {
+    const [, Mo, D, Yraw, hRaw, mi, s, ampm] = m;
+    let h = +hRaw;
+    if (ampm) {
+      const pm = /p/i.test(ampm);
+      if (h === 12) h = pm ? 12 : 0;
+      else if (pm) h += 12;
+    }
+    const Y = Yraw.length === 2 ? 2000 + +Yraw : +Yraw;
+    return { Y, Mo: +Mo, D: +D, h, mi: +mi, s: s ? +s : 0 };
+  }
+
+  return null;
+}
+
+/**
+ * Convert an ET wall-clock string into a real UTC instant.
+ * Returns a Date, or null if the string is not parseable.
  */
 export function localToUtc(localStr, tz) {
-  const m = String(localStr ?? '').trim()
-    .match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?$/);
-  if (!m) return null;
-  const [, Y, Mo, D, h, mi, s] = m;
+  const f = parseWallClock(localStr);
+  if (!f) return null;
+  const { Y, Mo, D, h, mi, s } = f;
   // Step 1: pretend the wall-clock fields are UTC.
   const wallAsUtc = Date.UTC(+Y, +Mo - 1, +D, +h, +mi, s ? +s : 0);
   // Step 2: subtract the zone offset at that approximate instant.

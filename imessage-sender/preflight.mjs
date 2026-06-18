@@ -1,59 +1,62 @@
-// Automated pre-flight check — run this Wednesday night (and Thursday morning).
+// Automated pre-flight check — run before the weekend (and again that morning).
 // It changes NOTHING. It verifies the parts that are easy to get wrong:
-//   1. All required env vars / secrets are present.
-//   2. The service account can authenticate and read the Sheet, and the schema is right.
-//   3. Every row's ET time converts to the expected UTC instant (so DST math is sane).
-//   4. It prints the dry-run decision per row and loudly flags rows that are READY but
-//      still have a blank message (those will never send — by design — but you may have
-//      meant to fill them).
-//   5. (Optional) If LOOPMESSAGE_LOOKUP_KEY is set, it best-effort checks each phone for
-//      iMessage capability via the LoopMessage Lookup API. This endpoint/credential must
-//      be confirmed when you sign up; failures here are reported, not fatal.
+//   1. Config loads (and, for the cloud path, secrets are present).
+//   2. The schedule store reads (CSV file or Google Sheet) and the schema is right.
+//   3. Every send_at_local converts to the expected UTC instant (DST sanity).
+//   4. The per-row send decision, loudly flagging rows that are READY but have a blank
+//      message or a placeholder phone.
+//   5. Mac path: confirms osascript + Messages.app are present (no message is sent).
 
 import { loadConfig, STATUS } from './lib/config.mjs';
-import { makeSheetClient } from './lib/sheet.mjs';
 import { decideRow, localToUtc } from './lib/schedule.mjs';
+import { execFile } from 'node:child_process';
 
 const cfg = loadConfig(process.env, { requireSendCreds: false });
 const graceMs = cfg.graceHours * 3600000;
 const now = new Date();
 
 let problems = 0;
-const flag = (msg) => { problems++; console.log(`  ✗ ${msg}`); };
-const ok = (msg) => console.log(`  ✓ ${msg}`);
+const flag = (m) => { problems++; console.log(`  ✗ ${m}`); };
+const ok = (m) => console.log(`  ✓ ${m}`);
 
 console.log('=== PRE-FLIGHT ===');
-console.log(`now=${now.toISOString()}  tz=${cfg.tz}  grace=${cfg.graceHours}h  tab=${cfg.sheetTab}`);
+console.log(`now=${now.toISOString()}  source=${cfg.source}  transport=${cfg.transport}  tz=${cfg.tz}  grace=${cfg.graceHours}h`);
 
-// 1. Secrets present (send creds are only needed for live runs, but warn if absent).
-console.log('\n[1] Secrets / config');
-for (const k of ['SHEET_ID', 'GOOGLE_SERVICE_ACCOUNT_JSON']) {
-  process.env[k] ? ok(`${k} present`) : flag(`${k} MISSING`);
-}
-for (const k of ['LOOPMESSAGE_AUTH_KEY', 'LOOPMESSAGE_SECRET_KEY', 'LOOPMESSAGE_SENDER_NAME']) {
-  process.env[k] ? ok(`${k} present`) : console.log(`  ! ${k} not set (required for LIVE sends)`);
+// [1] config / secrets
+console.log('\n[1] Config');
+ok(`source=${cfg.source}, transport=${cfg.transport}`);
+if (cfg.transport === 'loop') {
+  for (const k of ['LOOPMESSAGE_AUTH_KEY', 'LOOPMESSAGE_SECRET_KEY', 'LOOPMESSAGE_SENDER_NAME']) {
+    process.env[k] ? ok(`${k} present`) : console.log(`  ! ${k} not set (required for LIVE loop sends)`);
+  }
 }
 
-// 2 + 3 + 4. Sheet read, schema, time conversion, decisions.
-console.log('\n[2] Google Sheet read + schema');
-let sheet;
+// [2] store read + schema
+console.log(`\n[2] Read schedule (${cfg.source})`);
+let store;
 try {
-  sheet = await makeSheetClient(cfg);
-  ok(`read ${sheet.rows.length} data row(s); schema OK`);
+  if (cfg.source === 'sheet') {
+    const { makeSheetClient } = await import('./lib/sheet.mjs');
+    store = await makeSheetClient(cfg);
+  } else {
+    const { makeCsvClient } = await import('./lib/csv_store.mjs');
+    store = makeCsvClient(cfg);
+  }
+  ok(`read ${store.rows.length} row(s); schema OK`);
 } catch (err) {
-  flag(`could not read Sheet: ${err.message}`);
+  flag(`could not read schedule: ${err.message}`);
   console.log(`\nPRE-FLIGHT FAILED with ${problems} problem(s).`);
   process.exit(1);
 }
 
+// [3] + [4] time conversion and per-row decision
 console.log('\n[3] Time conversion + [4] per-row decision');
-const phones = new Set();
-for (const row of sheet.rows) {
+for (const row of store.rows) {
   const status = String(row.status ?? '').trim().toUpperCase();
   const due = localToUtc(row.send_at_local, cfg.tz);
   const dueStr = due ? due.toISOString() : 'UNPARSEABLE';
-  const decision = decideRow(row, { now, graceMs, tz: cfg.tz });
-  console.log(`  • ${row.id}  ${row.send_at_local} ET -> ${dueStr}  [${status || 'EMPTY'}]  ${decision.send ? 'SEND' : 'skip'}: ${decision.reason}`);
+  const d = decideRow(row, { now, graceMs, tz: cfg.tz });
+  console.log(`  • ${row.id}  ${row.send_at_local} ET -> ${dueStr}  [${status || 'EMPTY'}]  ${d.send ? 'SEND' : 'skip'}: ${d.reason}`);
 
   if (status === STATUS.READY && String(row.message ?? '').trim() === '') {
     flag(`${row.id} is READY but message is BLANK — it will NOT send. Fill copy or set HOLD.`);
@@ -62,34 +65,24 @@ for (const row of sheet.rows) {
     flag(`${row.id} is READY but send_at_local is unparseable: "${row.send_at_local}"`);
   }
   if (/X/i.test(String(row.recipient_phone))) {
-    flag(`${row.id} still has a placeholder phone: ${row.recipient_phone}`);
+    flag(`${row.id} still has a placeholder handle: ${row.recipient_phone}`);
   }
-  if (row.recipient_phone) phones.add(String(row.recipient_phone).trim());
 }
 
-// 5. Optional iMessage capability lookup (best-effort; endpoint must be confirmed at signup).
-console.log('\n[5] iMessage capability lookup (optional)');
-if (!process.env.LOOPMESSAGE_LOOKUP_KEY) {
-  console.log('  ! LOOPMESSAGE_LOOKUP_KEY not set — skipping. '
-    + '(Blue-only is still guaranteed by keeping SMS fallback OFF on the sender.)');
+// [5] transport reachability
+console.log('\n[5] Transport check');
+if (cfg.transport === 'imessage') {
+  await new Promise((resolve) => {
+    execFile('osascript', ['-e', 'tell application "Messages" to get name'], { timeout: 10000 }, (err, stdout) => {
+      if (err) flag(`osascript/Messages not reachable: ${String(err.message).slice(0, 200)} `
+        + `(run on the Mac, and approve the Automation prompt)`);
+      else ok(`Messages.app reachable via osascript (${String(stdout).trim()})`);
+      resolve();
+    });
+  });
+  console.log('  · Blue-only is guaranteed: we target the iMessage service; non-iMessage handles error out (FAILED), never green.');
 } else {
-  for (const phone of phones) {
-    if (/X/i.test(phone)) continue;
-    try {
-      const res = await fetch('https://a.looplookup.com/api/v1/lookup/', {
-        method: 'POST',
-        headers: {
-          Authorization: process.env.LOOPMESSAGE_LOOKUP_KEY,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ recipient: phone }),
-      });
-      const json = await res.json().catch(() => null);
-      console.log(`  • ${phone}: ${res.status} ${JSON.stringify(json)}`);
-    } catch (err) {
-      console.log(`  • ${phone}: lookup unavailable (${err.message})`);
-    }
-  }
+  console.log('  · loop transport: blue-only relies on NOT enabling SMS fallback on the sender.');
 }
 
 console.log(`\nPRE-FLIGHT ${problems ? `found ${problems} problem(s)` : 'clean'}.`);

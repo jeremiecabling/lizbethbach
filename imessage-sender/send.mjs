@@ -15,17 +15,13 @@
 
 import { STATUS, loadConfig } from './lib/config.mjs';
 import { decideRow } from './lib/schedule.mjs';
-import { makeSheetClient } from './lib/sheet.mjs';
-import { sendImessage } from './lib/loop.mjs';
 
 export async function run({
-  sheet,            // { rows, update(rowNumber, updates) }
-  send,             // async ({ ...loopCreds, recipient, text, webhookUrl }) -> result
+  sheet,            // { rows, update(key, updates) }  -- "sheet" is the generic store
+  send,             // async ({ ...creds, recipient, text }) -> result
   now,              // Date
   graceMs,
   tz,
-  loopCreds,        // { authKey, secretKey, senderName }
-  webhookUrl,
   dryRun = false,
   log = console.log,
 }) {
@@ -50,7 +46,7 @@ export async function run({
 
     // --- RESERVE before sending (idempotency anchor) ---
     try {
-      await sheet.update(row._rowNumber, { status: STATUS.SENDING });
+      await sheet.update(row._key, { status: STATUS.SENDING });
       summary.reserved++;
     } catch (err) {
       // Reserve failed -> we have NOT sent. Leave the row untouched; retried next run.
@@ -62,8 +58,6 @@ export async function run({
     let res;
     try {
       res = await send({
-        ...loopCreds,
-        webhookUrl,
         recipient: row.recipient_phone,
         text: row.message, // verbatim, opaque
       });
@@ -73,7 +67,7 @@ export async function run({
 
     if (res.ok) {
       summary.sent++;
-      await safeUpdate(sheet, row._rowNumber, {
+      await safeUpdate(sheet, row._key, {
         status: STATUS.SENT,
         sent_at_utc: new Date(now).toISOString(),
         result_note: String(res.messageId),
@@ -82,11 +76,11 @@ export async function run({
     } else if (res.uncertain) {
       // Leave SENDING (already reserved). No auto-retry; flag for the user.
       summary.failed++;
-      await safeUpdate(sheet, row._rowNumber, { result_note: `UNCERTAIN: ${res.error}` }, log, tag);
+      await safeUpdate(sheet, row._key, { result_note: `UNCERTAIN: ${res.error}` }, log, tag);
       log(`UNCERT ${tag} :: left SENDING (inspect manually) :: ${res.error}`);
     } else {
       summary.failed++;
-      await safeUpdate(sheet, row._rowNumber, {
+      await safeUpdate(sheet, row._key, {
         status: STATUS.FAILED,
         result_note: res.error,
       }, log, tag);
@@ -115,6 +109,33 @@ function preview(message) {
   return t.length > 80 ? `${t.slice(0, 77)}...` : t;
 }
 
+// Build the schedule store (CSV file or Google Sheet) per config.
+async function buildStore(cfg) {
+  if (cfg.source === 'sheet') {
+    const { makeSheetClient } = await import('./lib/sheet.mjs');
+    return makeSheetClient(cfg);
+  }
+  const { makeCsvClient } = await import('./lib/csv_store.mjs');
+  return makeCsvClient(cfg);
+}
+
+// Build the send function (Messages.app or LoopMessage) per config.
+async function buildSend(cfg) {
+  if (cfg.transport === 'loop') {
+    const { sendImessage } = await import('./lib/loop.mjs');
+    return ({ recipient, text }) => sendImessage({
+      authKey: cfg.loop.authKey,
+      secretKey: cfg.loop.secretKey,
+      senderName: cfg.loop.senderName,
+      webhookUrl: cfg.loop.webhookUrl,
+      recipient,
+      text,
+    });
+  }
+  const { sendViaMessages } = await import('./lib/imessage_mac.mjs');
+  return ({ recipient, text }) => sendViaMessages({ recipient, text });
+}
+
 // ---- CLI entry ----
 const invokedDirectly = import.meta.url === `file://${process.argv[1]}`;
 if (invokedDirectly) {
@@ -122,21 +143,17 @@ if (invokedDirectly) {
   const cfg = loadConfig(process.env, { requireSendCreds: !dryRun });
   const graceMs = cfg.graceHours * 3600000;
 
-  console.log(`iMessage sender — ${dryRun ? 'DRY RUN' : 'LIVE'} | tz=${cfg.tz} | grace=${cfg.graceHours}h | now=${new Date().toISOString()}`);
+  console.log(`iMessage sender — ${dryRun ? 'DRY RUN' : 'LIVE'} | source=${cfg.source} `
+    + `transport=${cfg.transport} | tz=${cfg.tz} | grace=${cfg.graceHours}h | now=${new Date().toISOString()}`);
 
-  const sheet = await makeSheetClient(cfg);
+  const sheet = await buildStore(cfg);
+  const send = await buildSend(cfg);
   await run({
     sheet,
-    send: (args) => sendImessage(args),
+    send,
     now: new Date(),
     graceMs,
     tz: cfg.tz,
-    loopCreds: {
-      authKey: cfg.loop.authKey,
-      secretKey: cfg.loop.secretKey,
-      senderName: cfg.loop.senderName,
-    },
-    webhookUrl: cfg.loop.webhookUrl,
     dryRun,
     log: console.log,
   });

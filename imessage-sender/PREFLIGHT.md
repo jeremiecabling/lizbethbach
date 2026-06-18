@@ -1,64 +1,59 @@
-# Pre-flight checklist — run Wednesday night (Jun 17)
+# Pre-flight checklist (Mac path)
 
-Goal: be certain the unattended sender will fire correctly Thursday with no one watching.
-Most of this is automated by `npm run preflight`; the rest is two-minute manual checks.
+Run this before you walk away and trust it to fire unattended.
 
 ## A. Automated check
 
 ```bash
 cd imessage-sender
-export SHEET_ID=...                              # repo variable value
-export GOOGLE_SERVICE_ACCOUNT_JSON="$(cat key.json)"
-# optional, only if you have it: export LOOPMESSAGE_LOOKUP_KEY=...
-npm run preflight
+node preflight.mjs
 ```
 
-`preflight` verifies (and changes nothing):
-- required env/secrets are present,
-- the service account can read the Sheet and the schema is correct,
-- every `send_at_local` converts to the expected UTC instant (DST sanity),
-- the per-row send decision, and it **loudly flags** any row that is `READY` but has a
-  blank message or a placeholder phone.
+Verifies (changes nothing): config loads, `schedule.csv` reads and the schema is right,
+every `send_at_local` converts to the expected UTC instant, the per-row decision, that
+osascript/Messages.app is reachable, and it loudly flags rows that are `READY` with a
+blank message or a placeholder phone. Exits non-zero if it finds a problem.
 
-It exits non-zero if it finds a problem.
+## B. iMessage sender identity
 
-## B. LoopMessage account
+- [ ] You're signed into Messages on this Mac with the Apple ID you want to send from.
+- [ ] If using a themed email handle: it's added + verified on the Apple ID, checked in
+      **Messages → Settings → iMessage → Send & Receive**, and set as **"Start new
+      conversations from."**
+- [ ] You generated the vCard and sent it to each recipient; they saved it. (This also
+      opens each conversation, which makes automated sends reliable.)
 
-- [ ] Signed up; a **shared sender name** is active (not a pending dedicated/branded one).
-- [ ] **SMS fallback / RCS is OFF** on the sender (guarantees blue-only).
-- [ ] `LOOPMESSAGE_AUTH_KEY`, `LOOPMESSAGE_SECRET_KEY`, `LOOPMESSAGE_SENDER_NAME` match
-      the dashboard exactly.
-- [ ] Plan/credits cover ~9 messages (trivial — confirm the month's charge at checkout).
+## C. The schedule (`schedule.csv`)
 
-## C. Google Sheet
-
-- [ ] Tab name matches `SHEET_TAB` (or is `Schedule`).
-- [ ] Header row is exactly: `id, recipient_name, recipient_phone, moment, send_at_local,
-      message, status, sent_at_utc, result_note`.
-- [ ] All 9 rows have **real** E.164 phone numbers (`+1…`), no `+1XXXXXXXXXX` left.
-- [ ] `send_at_local` cells read like `2026-06-18 14:00` (plain text, ET wall-clock).
+- [ ] Every row has a **real** iMessage handle (no `+1XXXXXXXXXX` left).
+- [ ] `send_at_local` reads like `2026-06-18 14:00` (plain text, ET).
 - [ ] Every message you intend to send has copy AND status `READY`. Everything else is
       `HOLD`/`SKIP`.
-- [ ] Sheet is shared with the service-account email as **Editor**.
 
-## D. GitHub
+## D. Live smoke test (do this once)
 
-- [ ] All four secrets + `SHEET_ID` variable set with the **exact** names from the README.
-- [ ] **Actions → iMessage Sender → Run workflow → dry_run = true** prints the rows you
-      expect, with correct ET→UTC times, and reports `sent=0` (dry run sends nothing).
-- [ ] The scheduled workflow is enabled (Actions tab shows it; note that GitHub may
-      pause schedules on inactive repos — a manual dispatch wakes it).
+- [ ] Add a throwaway row targeting **your own** number, status `SEND_NOW`, short text.
+- [ ] `node send.mjs` → approve the macOS "control Messages" prompt → confirm you get a
+      **blue** bubble and `sent-ledger.json` shows the row as `SENT`. Then `SKIP`/remove
+      that row (and its ledger entry).
 
-## E. Live smoke test (recommended)
+## E. Scheduler + stay awake
 
-- [ ] Add one extra throwaway row targeting **your own phone**, status `SEND_NOW`, with a
-      short test message. Wait ≤5 min → confirm you receive a **blue** iMessage and the
-      row flips to `SENT` with a `message_id` in `result_note`. Then `SKIP` or delete it.
+- [ ] `bash macos/install.sh` ran cleanly; `~/Library/Logs/imessage-sender.out.log`
+      shows a run within 5 minutes.
+- [ ] `bash macos/keep-awake.sh` is running in an open Terminal window (and the Mac is
+      on AC power). launchd will not fire while the Mac is asleep.
 
 ## F. Day-of muscle memory
 
-- To fire now: set the row's status to `SEND_NOW`.
-- To stop one: set `SKIP` or `HOLD`.
-- A failure shows as `FAILED` with the reason in `result_note`; fix, then set `READY`.
-- A row stuck on `SENDING` means an uncertain network result — check whether it actually
-  arrived before resetting it.
+- Fire now: set the row's `status` to `SEND_NOW`.
+- Stop one: set `SKIP` or `HOLD`.
+- A failure shows as `FAILED`; fix it, set `READY`, and remove its `sent-ledger.json`
+  entry if present.
+- A row stuck on `SENDING` = an uncertain/timed-out send — check whether it actually
+  arrived in Messages before resetting it.
+
+---
+
+_Cloud path (Google Sheet + LoopMessage) instead? See the bottom of `README.md`; the
+checklist there is account setup, secrets, SMS-fallback OFF, and a dry-run dispatch._
